@@ -1,29 +1,19 @@
 import argparse
 import json
 import sys
-from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright, expect
+from playwright.sync_api import sync_playwright
 
-
-def run():
-    parser = argparse.ArgumentParser(description="Playwright browser agent")
+def main():
+    parser = argparse.ArgumentParser(description="Playwright Browser Agent")
     parser.add_argument("--base-url", required=True, help="Base URL of the benchmark")
-    parser.add_argument(
-        "--scenario",
-        required=True,
-        choices=["search", "dynamic_dom", "pagination"],
-        help="Scenario name to execute",
-    )
+    parser.add_argument("--scenario", required=True, choices=["search", "dynamic_dom", "pagination"], help="Scenario to execute")
     args = parser.parse_args()
 
-    base_url = args.base_url.rstrip("/")
-    scenario = args.scenario
-
     result = {
-        "scenario": scenario,
+        "scenario": args.scenario,
         "success": False,
         "extracted_text": None,
-        "final_url": "",
+        "final_url": ""
     }
 
     with sync_playwright() as p:
@@ -32,63 +22,58 @@ def run():
         page = context.new_page()
 
         try:
-            if scenario == "search":
-                target_url = base_url + "/"
-                page.goto(target_url)
+            if args.scenario == "search":
+                page.goto(args.base_url)
                 page.fill("input#search", "browser automation")
                 page.click("button[type=submit]")
-                search_result = page.locator("#search-result")
-                search_result.wait_for(state="visible")
-                raw_text = search_result.inner_text().strip()
+                page.wait_for_selector("#search-result")
+                raw_text = page.locator("#search-result").inner_text()
+                result["extracted_text"] = raw_text.strip()
                 result["final_url"] = page.url
-                if raw_text == "Found: browser automation":
-                    result["extracted_text"] = raw_text
+                if result["extracted_text"] == "Found: browser automation":
                     result["success"] = True
-                else:
-                    result["extracted_text"] = raw_text
 
-            elif scenario == "dynamic_dom":
-                target_url = urljoin(base_url + "/", "dynamic")
-                page.goto(target_url)
+            elif args.scenario == "dynamic_dom":
+                page.goto(f"{args.base_url}/dynamic")
                 page.click("button#load-record")
-                dyn_result = page.locator("#dynamic-result")
-                expect(dyn_result).to_have_text("Loaded record: DYNAMIC-42")
-                raw_text = dyn_result.inner_text().strip()
+                
+                # Wait until #dynamic-result contains the exact text 'Loaded record: DYNAMIC-42'
+                page.wait_for_function(
+                    "() => { const el = document.querySelector('#dynamic-result'); return el && el.innerText.trim() === 'Loaded record: DYNAMIC-42'; }"
+                )
+                
+                raw_text = page.locator("#dynamic-result").inner_text()
+                result["extracted_text"] = raw_text.strip()
                 result["final_url"] = page.url
-                if raw_text == "Loaded record: DYNAMIC-42":
-                    result["extracted_text"] = raw_text
+                if result["extracted_text"] == "Loaded record: DYNAMIC-42":
                     result["success"] = True
-                else:
-                    result["extracted_text"] = raw_text
 
-            elif scenario == "pagination":
-                target_url = urljoin(base_url + "/", "page/1")
-                page.goto(target_url)
+            elif args.scenario == "pagination":
+                page.goto(f"{args.base_url}/page/1")
                 page.click("a#next")
-                h1_locator = page.locator("h1")
-                expect(h1_locator).to_have_text("Page 2 of 2")
-                page_record = page.locator("#page-record")
-                raw_text = page_record.inner_text().strip()
+                
+                # Wait for h1 to equal 'Page 2 of 2'
+                page.wait_for_function(
+                    "() => { const el = document.querySelector('h1'); return el && el.innerText.trim() === 'Page 2 of 2'; }"
+                )
+                
+                page.wait_for_selector("#page-record")
+                raw_text = page.locator("#page-record").inner_text()
+                result["extracted_text"] = raw_text.strip()
                 result["final_url"] = page.url
-                if raw_text == "Record 2 of 2: pagination verified":
-                    result["extracted_text"] = raw_text
+                
+                h1_text = page.locator("h1").inner_text().strip()
+                if h1_text == "Page 2 of 2" and result["extracted_text"] == "Record 2 of 2: pagination verified":
                     result["success"] = True
-                else:
-                    result["extracted_text"] = raw_text
 
         except Exception as e:
-            if not result["final_url"]:
-                try:
-                    result["final_url"] = page.url
-                except Exception:
-                    result["final_url"] = ""
             result["success"] = False
+            result["extracted_text"] = str(e)
+            result["final_url"] = page.url
         finally:
-            context.close()
             browser.close()
 
     print(json.dumps(result))
 
-
 if __name__ == "__main__":
-    run()
+    main()
