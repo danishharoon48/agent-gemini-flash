@@ -2,71 +2,77 @@ import argparse
 import json
 import sys
 from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 
-def run():
-    parser = argparse.ArgumentParser(description="Browser automation agent benchmark")
-    parser.add_argument("--base-url", required=True, help="Base URL of benchmark server")
+def main():
+    parser = argparse.ArgumentParser(description="Playwright browser automation agent")
+    parser.add_argument("--base-url", required=True, help="Benchmark base URL")
     parser.add_argument("--scenario", required=True, choices=["search", "dynamic_dom", "pagination"], help="Scenario to run")
     args = parser.parse_args()
 
+    base_url = args.base_url.rstrip("/") + "/"
+    scenario = args.scenario
+
     result = {
-        "scenario": args.scenario,
+        "scenario": scenario,
         "success": False,
         "extracted_text": None,
         "final_url": ""
     }
 
-    base_url = args.base_url
-    if not base_url.endswith("/"):
-        base_url += "/"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-
-            if args.scenario == "search":
-                page.goto(args.base_url)
+        try:
+            if scenario == "search":
+                page.goto(base_url)
                 page.fill("input#search", "browser automation")
                 page.click("button[type=submit]")
-                page.wait_for_selector("#search-result")
-                text = page.locator("#search-result").inner_text().strip()
-                result["extracted_text"] = text
+                search_loc = page.locator("#search-result")
+                search_loc.wait_for(state="visible")
+                extracted = search_loc.inner_text().strip()
+                result["extracted_text"] = extracted
                 result["final_url"] = page.url
-                if text == "Found: browser automation":
+                if extracted == "Found: browser automation":
                     result["success"] = True
 
-            elif args.scenario == "dynamic_dom":
+            elif scenario == "dynamic_dom":
                 target_url = urljoin(base_url, "dynamic")
                 page.goto(target_url)
                 page.click("button#load-record")
-                page.locator("#dynamic-result", has_text="Loaded record: DYNAMIC-42").wait_for(timeout=10000)
-                text = page.locator("#dynamic-result").inner_text().strip()
-                result["extracted_text"] = text
+                dynamic_loc = page.locator("#dynamic-result")
+                expect(dynamic_loc).to_have_text("Loaded record: DYNAMIC-42", timeout=10000)
+                extracted = dynamic_loc.inner_text().strip()
+                result["extracted_text"] = extracted
                 result["final_url"] = page.url
-                if text == "Loaded record: DYNAMIC-42":
+                if extracted == "Loaded record: DYNAMIC-42":
                     result["success"] = True
 
-            elif args.scenario == "pagination":
+            elif scenario == "pagination":
                 target_url = urljoin(base_url, "page/1")
                 page.goto(target_url)
                 page.click("a#next")
-                page.locator("h1", has_text="Page 2 of 2").wait_for(timeout=10000)
-                text = page.locator("#page-record").inner_text().strip()
-                result["extracted_text"] = text
+                h1_loc = page.locator("h1")
+                expect(h1_loc).to_have_text("Page 2 of 2", timeout=10000)
+                record_loc = page.locator("#page-record")
+                extracted = record_loc.inner_text().strip()
+                result["extracted_text"] = extracted
                 result["final_url"] = page.url
-                if text == "Record 2 of 2: pagination verified":
+                if extracted == "Record 2 of 2: pagination verified":
                     result["success"] = True
 
+        except Exception:
+            if page:
+                result["final_url"] = page.url
+        finally:
+            context.close()
             browser.close()
-    except Exception:
-        pass
 
     print(json.dumps(result))
 
 
 if __name__ == "__main__":
-    run()
+    main()
