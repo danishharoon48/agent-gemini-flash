@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import os
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -41,15 +44,12 @@ class GeminiDiagnosticTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(body, {})
 
-    def test_diagnostic_reports_all_model_probes_even_if_models_list_times_out(self):
-        response = {
-            "candidates": [{"content": {"parts": [{"text": "OK"}]}}],
-        }
+    def test_diagnostic_handles_models_list_timeout_without_static_model_probes(self):
         with (
             patch.object(
                 gemini_diagnostic,
                 "_request",
-                side_effect=[(None, {}), (503, {}), (404, {}), (200, response)],
+                return_value=(None, {}),
             ) as request,
             contextlib.redirect_stdout(io.StringIO()) as stdout,
         ):
@@ -57,13 +57,57 @@ class GeminiDiagnosticTests(unittest.TestCase):
 
         result = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
-        self.assertEqual(request.call_count, 4)
+        self.assertEqual(request.call_count, 1)
         self.assertIsNone(result["models_list_http_status"])
+        self.assertEqual(result["models_list_supported"], [])
+        self.assertEqual(result["generate_content_probes"], [])
+        self.assertIsNone(result["selected_model"])
+
+    def test_diagnostic_probes_every_discovered_model_and_selects_first_healthy(self):
+        listing = {
+            "models": [
+                {"name": "models/gemini-unhealthy", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-healthy-first", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-healthy-second", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-embedding", "supportedGenerationMethods": ["embedContent"]},
+            ]
+        }
+        valid_response = {
+            "candidates": [{"content": {"parts": [{"text": "pong"}]}}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            selection_path = Path(temporary) / "selection.json"
+            with (
+                patch.dict(os.environ, {"GEMINI_MODEL_SELECTION_PATH": str(selection_path)}),
+                patch.object(
+                    gemini_diagnostic,
+                    "_request",
+                    side_effect=[
+                        (200, listing),
+                        (503, {}),
+                        (200, valid_response),
+                        (200, valid_response),
+                    ],
+                ) as request,
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                exit_code = gemini_diagnostic.run_diagnostic("test-key")
+            persisted = json.loads(selection_path.read_text(encoding="utf-8"))
+
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(
+            result["models_list_supported"],
+            ["gemini-unhealthy", "gemini-healthy-first", "gemini-healthy-second"],
+        )
+        self.assertEqual(result["selected_model"], "gemini-healthy-first")
+        self.assertEqual(persisted["selected_model"], "gemini-healthy-first")
         self.assertEqual(
             [item["http_status"] for item in result["generate_content_probes"]],
-            [503, 404, 200],
+            [503, 200, 200],
         )
-        self.assertTrue(result["generate_content_probes"][2]["generated_text"])
+        self.assertTrue(all(call.args[0].startswith(gemini_diagnostic.API_ROOT + "/models/") for call in request.call_args_list[1:]))
 
 
 if __name__ == "__main__":

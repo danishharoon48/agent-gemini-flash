@@ -79,12 +79,29 @@ def _retry_delay(headers, attempt):
     return min(30.0, delay * random.uniform(0.8, 1.2))
 
 
+def _discovered_gemini_model():
+    selection_path = ROOT / "gemini_model_selection.json"
+    try:
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    model = selection.get("selected_model") if isinstance(selection, dict) else None
+    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model):
+        return None
+    return model
+
+
 def _gemini_model_chain(primary):
     configured = os.getenv(
         "GEMINI_MODEL_FALLBACKS",
         "gemini-2.5-flash-lite,gemini-2.5-flash",
     )
-    models = [primary]
+    models = []
+    discovered = _discovered_gemini_model()
+    if discovered:
+        models.append(discovered)
+    if primary and primary not in models:
+        models.append(primary)
     for candidate in configured.split(","):
         candidate = candidate.strip()
         if candidate and candidate not in models:

@@ -7,14 +7,10 @@ import sys
 import urllib.error
 import urllib.request
 
+from scripts.gemini_model_discovery import discover_generation_models, has_generated_text
+
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 REQUEST_TIMEOUT_SECONDS = 10
-MODELS_TO_PROBE = (
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3.8-flash",
-)
-
 
 def _request(url, api_key, payload=None):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -43,40 +39,43 @@ def _request(url, api_key, payload=None):
 
 def run_diagnostic(api_key):
     list_status, listing = _request(API_ROOT + "/models", api_key)
-    available = []
-    for item in listing.get("models", []) if isinstance(listing, dict) else []:
-        name = str(item.get("name", "")).removeprefix("models/")
-        methods = item.get("supportedGenerationMethods", [])
-        if name in MODELS_TO_PROBE and "generateContent" in methods:
-            available.append(name)
+    discovered = discover_generation_models(listing)
 
     probes = []
-    for model in MODELS_TO_PROBE:
+    selected_model = None
+    for model in discovered:
         status, response = _request(
             API_ROOT + "/models/" + model + ":generateContent",
             api_key,
             {
-                "contents": [{"role": "user", "parts": [{"text": "Reply with exactly OK."}]}],
+                "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
                 "generationConfig": {"temperature": 0, "maxOutputTokens": 8},
             },
         )
-        candidates = response.get("candidates", []) if isinstance(response, dict) else []
-        text_generated = any(
-            isinstance(part.get("text"), str) and part["text"].strip()
-            for candidate in candidates
-            for part in candidate.get("content", {}).get("parts", [])
-        )
-        probes.append({
+        generated_text = has_generated_text(response)
+        probe = {
             "model": model,
             "http_status": status,
-            "generated_text": bool(text_generated),
-        })
+            "generated_text": generated_text,
+        }
+        probes.append(probe)
+        if selected_model is None and status == 200 and generated_text:
+            selected_model = model
 
     result = {
         "models_list_http_status": list_status,
-        "models_list_supported": available,
+        "models_list_supported": discovered,
         "generate_content_probes": probes,
+        "selected_model": selected_model,
     }
+    selection = {
+        "selected_model": selected_model,
+        "discovered_models": discovered,
+        "probes": probes,
+    }
+    selection_path = os.getenv("GEMINI_MODEL_SELECTION_PATH", "gemini_model_selection.json")
+    with open(selection_path, "w", encoding="utf-8") as output:
+        json.dump(selection, output, sort_keys=True)
     print(json.dumps(result, sort_keys=True))
     return 0
 
