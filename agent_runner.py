@@ -51,7 +51,7 @@ def provider_config(provider):
         key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not key:
             raise ProviderRequestError("GEMINI_API_KEY is not configured")
-        return "gemini", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), key
+        return "gemini", os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), key
     if provider == "groq":
         key = os.getenv("GROQ_API_KEY")
         if not key:
