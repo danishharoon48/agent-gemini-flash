@@ -36,10 +36,25 @@ class GeminiModelDiscoveryTests(unittest.TestCase):
         }))
         self.assertFalse(has_generated_text({"candidates": []}))
 
-    def test_runner_promotes_diagnostic_selected_model_ahead_of_static_fallbacks(self):
+    def test_runner_promotes_all_healthy_diagnostic_models_in_order(self):
+        selection = {
+            "selected_model": "gemma-healthy",
+            "discovered_models": [
+                "gemma-healthy",
+                "gemini-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-unhealthy",
+            ],
+            "probes": [
+                {"model": "gemma-healthy", "http_status": 200, "generated_text": True},
+                {"model": "gemini-flash-lite", "http_status": 200, "generated_text": True},
+                {"model": "gemini-3.1-flash-lite", "http_status": 200, "generated_text": True},
+                {"model": "gemini-unhealthy", "http_status": 404, "generated_text": False},
+            ],
+        }
         with tempfile.TemporaryDirectory() as temporary:
             selection_file = Path(temporary) / "gemini_model_selection.json"
-            selection_file.write_text(json.dumps({"selected_model": "gemini-healthy"}), encoding="utf-8")
+            selection_file.write_text(json.dumps(selection), encoding="utf-8")
             with (
                 patch.object(agent_runner, "ROOT", Path(temporary)),
                 patch.dict("os.environ", {
@@ -49,7 +64,13 @@ class GeminiModelDiscoveryTests(unittest.TestCase):
             ):
                 self.assertEqual(
                     agent_runner._gemini_model_chain("gemini-static-primary"),
-                    ["gemini-healthy", "gemini-static-primary", "gemini-static-fallback"],
+                    [
+                        "gemma-healthy",
+                        "gemini-flash-lite",
+                        "gemini-3.1-flash-lite",
+                        "gemini-static-primary",
+                        "gemini-static-fallback",
+                    ],
                 )
 
     def test_runner_ignores_invalid_diagnostic_model_names(self):

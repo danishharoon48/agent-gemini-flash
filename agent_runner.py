@@ -79,16 +79,46 @@ def _retry_delay(headers, attempt):
     return min(30.0, delay * random.uniform(0.8, 1.2))
 
 
-def _discovered_gemini_model():
+def _discovered_gemini_models():
+    """Return diagnostic-proven text-generation models in discovery order."""
     selection_path = ROOT / "gemini_model_selection.json"
     try:
         selection = json.loads(selection_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
-        return None
-    model = selection.get("selected_model") if isinstance(selection, dict) else None
-    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model):
-        return None
-    return model
+        return []
+    if not isinstance(selection, dict):
+        return []
+
+    probes = selection.get("probes", [])
+    discovered = selection.get("discovered_models", [])
+    if not isinstance(probes, list) or not isinstance(discovered, list):
+        return []
+
+    healthy = set()
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        model = probe.get("model")
+        if (
+            isinstance(model, str)
+            and probe.get("http_status") == 200
+            and probe.get("generated_text") is True
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model)
+        ):
+            healthy.add(model)
+
+    selected = selection.get("selected_model")
+    ordered = []
+    if isinstance(selected, str) and selected in healthy:
+        ordered.append(selected)
+    for model in discovered:
+        if (
+            isinstance(model, str)
+            and model in healthy
+            and model not in ordered
+        ):
+            ordered.append(model)
+    return ordered
 
 
 def _gemini_model_chain(primary):
@@ -96,10 +126,7 @@ def _gemini_model_chain(primary):
         "GEMINI_MODEL_FALLBACKS",
         "gemini-2.5-flash-lite,gemini-2.5-flash",
     )
-    models = []
-    discovered = _discovered_gemini_model()
-    if discovered:
-        models.append(discovered)
+    models = _discovered_gemini_models()
     if primary and primary not in models:
         models.append(primary)
     for candidate in configured.split(","):
@@ -166,7 +193,11 @@ def _ask_gemini_model(model, key, prompt):
     parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
     content = next((part.get("text") for part in parts if isinstance(part.get("text"), str)), None)
     if not isinstance(content, str) or not content.strip():
-        raise ProviderRequestError("gemini model " + model + " returned empty or non-text content")
+        raise ProviderRequestError(
+            "gemini model " + model + " returned empty or non-text content",
+            retryable=True,
+            status_code=200,
+        )
     return content
 
 
