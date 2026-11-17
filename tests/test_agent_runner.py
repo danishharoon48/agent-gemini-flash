@@ -100,22 +100,22 @@ class AgentRunnerTests(unittest.TestCase):
     def test_gemini_model_chain_uses_ordered_fallbacks_without_duplicates(self):
         with patch.dict(os.environ, {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-primary",
-            "GEMINI_MODEL_FALLBACKS": "gemini-fallback-a, gemini-fallback-b,gemini-primary",
+            "GEMINI_MODEL": "gemini-primary-flash",
+            "GEMINI_MODEL_FALLBACKS": "gemini-fallback-a-flash, gemini-fallback-b-flash,gemini-primary-flash",
         }, clear=True):
             self.assertEqual(
-                agent_runner._gemini_model_chain("gemini-primary"),
-                ["gemini-primary", "gemini-fallback-a", "gemini-fallback-b"],
+                agent_runner._gemini_model_chain("gemini-primary-flash"),
+                ["gemini-primary-flash", "gemini-fallback-a-flash", "gemini-fallback-b-flash"],
             )
 
     def test_gemini_falls_back_to_next_diagnostic_healthy_model_after_empty_content(self):
         with tempfile.TemporaryDirectory() as temporary:
             selection = {
-                "selected_model": "gemma-healthy",
-                "discovered_models": ["gemma-healthy", "gemini-flash-lite"],
+                "selected_model": "gemini-healthy-flash",
+                "discovered_models": ["gemini-healthy-flash", "gemini-flash-lite"],
                 "probes": [
-                    {"model": "gemma-healthy", "http_status": 200, "generated_text": True},
-                    {"model": "gemini-flash-lite", "http_status": 200, "generated_text": True},
+                    {"model": "gemini-healthy-flash", "http_status": 200, "valid_structured_response": True},
+                    {"model": "gemini-flash-lite", "http_status": 200, "valid_structured_response": True},
                 ],
             }
             (Path(temporary) / "gemini_model_selection.json").write_text(
@@ -134,8 +134,8 @@ class AgentRunnerTests(unittest.TestCase):
                 patch.object(agent_runner, "ROOT", Path(temporary)),
                 patch.dict(os.environ, {
                     "GEMINI_API_KEY": "test-key",
-                    "GEMINI_MODEL": "gemini-static-primary",
-                    "GEMINI_MODEL_FALLBACKS": "gemini-static-fallback",
+                    "GEMINI_MODEL": "gemini-static-primary-flash",
+                    "GEMINI_MODEL_FALLBACKS": "gemini-static-fallback-flash",
                 }, clear=True),
                 patch.object(agent_runner, "urlopen", side_effect=[empty, generated]) as request,
             ):
@@ -143,7 +143,7 @@ class AgentRunnerTests(unittest.TestCase):
 
         self.assertEqual(result, "print('fallback model worked')")
         self.assertEqual(request.call_count, 2)
-        self.assertIn("gemma-healthy:generateContent", request.call_args_list[0].args[0].full_url)
+        self.assertIn("gemini-healthy-flash:generateContent", request.call_args_list[0].args[0].full_url)
         self.assertIn("gemini-flash-lite:generateContent", request.call_args_list[1].args[0].full_url)
 
     def test_gemini_falls_back_after_all_primary_503_retries(self):
@@ -151,7 +151,7 @@ class AgentRunnerTests(unittest.TestCase):
         import urllib.error
 
         unavailable = urllib.error.HTTPError(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-primary:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-primary-flash:generateContent",
             503,
             "Service Unavailable",
             {},
@@ -166,8 +166,8 @@ class AgentRunnerTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {
                 "GEMINI_API_KEY": "test-key",
-                "GEMINI_MODEL": "gemini-primary",
-                "GEMINI_MODEL_FALLBACKS": "gemini-fallback",
+                "GEMINI_MODEL": "gemini-primary-flash",
+                "GEMINI_MODEL_FALLBACKS": "gemini-fallback-flash",
             }, clear=True),
             patch.object(agent_runner, "urlopen", side_effect=[unavailable] * 4 + [generated]) as request,
             patch.object(agent_runner.time, "sleep") as sleep,
@@ -178,8 +178,8 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual(result, "print('fallback model worked')")
         self.assertEqual(request.call_count, 5)
         requested_models = [call.args[0].full_url for call in request.call_args_list]
-        self.assertTrue(all("gemini-primary:generateContent" in url for url in requested_models[:4]))
-        self.assertIn("gemini-fallback:generateContent", requested_models[4])
+        self.assertTrue(all("gemini-primary-flash:generateContent" in url for url in requested_models[:4]))
+        self.assertIn("gemini-fallback-flash:generateContent", requested_models[4])
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [2.0, 5.0, 12.0])
 
 

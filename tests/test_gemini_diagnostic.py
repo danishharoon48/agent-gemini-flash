@@ -89,14 +89,18 @@ class GeminiDiagnosticTests(unittest.TestCase):
     def test_diagnostic_probes_every_discovered_model_and_selects_first_healthy(self):
         listing = {
             "models": [
-                {"name": "models/gemini-unhealthy", "supportedGenerationMethods": ["generateContent"]},
-                {"name": "models/gemini-healthy-first", "supportedGenerationMethods": ["generateContent"]},
-                {"name": "models/gemini-healthy-second", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-unhealthy-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-healthy-first-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-healthy-second-flash", "supportedGenerationMethods": ["generateContent"]},
                 {"name": "models/gemini-embedding", "supportedGenerationMethods": ["embedContent"]},
+                {"name": "models/gemini-2.5-pro", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemma-4-26b-a4b-it", "supportedGenerationMethods": ["generateContent"]},
             ]
         }
         valid_response = {
-            "candidates": [{"content": {"parts": [{"text": "pong"}]}}],
+            "candidates": [{"content": {"parts": [{
+                "text": '{"status":"ok","message":"pong"}'
+            }]}}],
         }
         with tempfile.TemporaryDirectory() as temporary:
             selection_path = Path(temporary) / "selection.json"
@@ -122,10 +126,10 @@ class GeminiDiagnosticTests(unittest.TestCase):
         self.assertEqual(request.call_count, 4)
         self.assertEqual(
             result["models_list_supported"],
-            ["gemini-unhealthy", "gemini-healthy-first", "gemini-healthy-second"],
+            ["gemini-unhealthy-flash", "gemini-healthy-first-flash", "gemini-healthy-second-flash"],
         )
-        self.assertEqual(result["selected_model"], "gemini-healthy-first")
-        self.assertEqual(persisted["selected_model"], "gemini-healthy-first")
+        self.assertEqual(result["selected_model"], "gemini-healthy-first-flash")
+        self.assertEqual(persisted["selected_model"], "gemini-healthy-first-flash")
         self.assertEqual(
             [item["http_status"] for item in result["generate_content_probes"]],
             [503, 200, 200],
