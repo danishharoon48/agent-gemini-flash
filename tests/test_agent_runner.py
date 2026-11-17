@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import agent_runner
 
@@ -55,6 +55,11 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertNotIn("groq-secret-test", command)
         self.assertNotIn("openrouter-secret-test", command)
 
+    def test_make_sandbox_writable_grants_container_user_access(self):
+        sandbox = Mock()
+        agent_runner._make_sandbox_writable(sandbox)
+        sandbox.chmod.assert_called_once_with(0o777)
+
     def test_execute_script_runs_in_container_and_copies_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -64,14 +69,20 @@ class AgentRunnerTests(unittest.TestCase):
                 patch.object(agent_runner, "ARTIFACTS", root / "artifacts"),
                 patch.dict(os.environ, {"GEMINI_API_KEY": "never-forward-this"}),
             ):
+                sandbox_paths = []
                 def fake_run(command, **kwargs):
                     mount = next(item for item in command if item.startswith("type=bind,src="))
                     sandbox_path = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+                    sandbox_paths.append(sandbox_path)
                     (sandbox_path / "output.json").write_text('{"success": true}', encoding="utf-8")
                     return subprocess.CompletedProcess(command, 0, "sandbox ok", "")
 
-                with patch.object(agent_runner.subprocess, "run", side_effect=fake_run) as run:
+                with (
+                    patch.object(agent_runner, "_make_sandbox_writable", wraps=agent_runner._make_sandbox_writable) as make_writable,
+                    patch.object(agent_runner.subprocess, "run", side_effect=fake_run) as run,
+                ):
                     success, logs = agent_runner.execute_script("print('safe')", 30)
+                    make_writable.assert_called_once()
 
                 self.assertTrue(success)
                 self.assertIn("sandbox ok", logs)
