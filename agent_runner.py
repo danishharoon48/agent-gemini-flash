@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -18,14 +19,16 @@ ROOT = Path.cwd()
 OUTPUT = ROOT / "output.json"
 ARTIFACTS = ROOT / "artifacts"
 MAX_REPAIRS = 5
-MAX_PROVIDER_RETRIES = 3
+MAX_PROVIDER_RETRIES = 4
+RETRY_DELAYS_SECONDS = (2.0, 5.0, 12.0)
 TRANSIENT_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 
 class ProviderRequestError(RuntimeError):
-    def __init__(self, message, retryable=False):
+    def __init__(self, message, retryable=False, status_code=None):
         super().__init__(message)
         self.retryable = retryable
+        self.status_code = status_code
 
 
 def extract_code(raw):
@@ -66,11 +69,26 @@ def provider_config(provider):
 
 
 def _retry_delay(headers, attempt):
+    delay = RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS) - 1)]
     value = headers.get("Retry-After") if headers else None
     try:
-        return max(0.0, min(8.0, float(value)))
+        delay = max(delay, min(30.0, max(0.0, float(value))))
     except (TypeError, ValueError):
-        return float(min(8, 2 ** attempt))
+        pass
+    return min(30.0, delay * random.uniform(0.8, 1.2))
+
+
+def _gemini_model_chain(primary):
+    configured = os.getenv(
+        "GEMINI_MODEL_FALLBACKS",
+        "gemini-2.5-flash-lite,gemini-2.5-flash",
+    )
+    models = [primary]
+    for candidate in configured.split(","):
+        candidate = candidate.strip()
+        if candidate and candidate not in models:
+            models.append(candidate)
+    return models
 
 
 def _sanitize_log(value):
@@ -84,21 +102,68 @@ def _sanitize_log(value):
     return text[:12000]
 
 
+def _ask_gemini_model(model, key, prompt):
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 8192},
+    }
+    headers = {"Content-Type": "application/json", "x-goog-api-key": key}
+    data = None
+    for attempt in range(MAX_PROVIDER_RETRIES):
+        request = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+        try:
+            with urlopen(request, timeout=90) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code in TRANSIENT_HTTP_STATUS
+            if retryable and attempt < MAX_PROVIDER_RETRIES - 1:
+                time.sleep(_retry_delay(exc.headers, attempt))
+                continue
+            raise ProviderRequestError(
+                "gemini model " + model + " returned HTTP " + str(exc.code),
+                retryable=retryable,
+                status_code=exc.code,
+            ) from None
+        except urllib.error.URLError as exc:
+            if attempt < MAX_PROVIDER_RETRIES - 1:
+                time.sleep(_retry_delay({}, attempt))
+                continue
+            raise ProviderRequestError(
+                "gemini model " + model + " connection failed: " + str(exc.reason),
+                retryable=True,
+            ) from None
+    if data is None:
+        raise ProviderRequestError("gemini model " + model + " returned no response", retryable=True)
+    candidates = data.get("candidates") or []
+    parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+    content = next((part.get("text") for part in parts if isinstance(part.get("text"), str)), None)
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderRequestError("gemini model " + model + " returned empty or non-text content")
+    return content
+
+
 def ask_model(provider, prompt):
     kind, model, key = provider_config(provider)
     if kind == "gemini":
-        url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 8192},
-        }
-        headers = {"Content-Type": "application/json", "x-goog-api-key": key}
-    else:
-        url = "https://api.groq.com/openai/v1/chat/completions" if kind == "openai" else "https://openrouter.ai/api/v1/chat/completions"
-        payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
-        headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
-        if kind == "openrouter":
-            headers.update({"HTTP-Referer": "https://github.com", "X-Title": "Multilingual Browser Agent"})
+        models = _gemini_model_chain(model)
+        last_error = None
+        for index, candidate in enumerate(models):
+            try:
+                return _ask_gemini_model(candidate, key, prompt)
+            except ProviderRequestError as exc:
+                last_error = exc
+                can_fallback = exc.retryable or exc.status_code == 404
+                if not can_fallback or index == len(models) - 1:
+                    raise
+        raise last_error or ProviderRequestError("No Gemini models configured")
+
+    url = "https://api.groq.com/openai/v1/chat/completions" if kind == "openai" else "https://openrouter.ai/api/v1/chat/completions"
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+    if kind == "openrouter":
+        headers.update({"HTTP-Referer": "https://github.com", "X-Title": "Multilingual Browser Agent"})
 
     data = None
     for attempt in range(MAX_PROVIDER_RETRIES):
@@ -115,10 +180,11 @@ def ask_model(provider, prompt):
             raise ProviderRequestError(
                 provider + " provider returned HTTP " + str(exc.code),
                 retryable=retryable,
+                status_code=exc.code,
             ) from None
         except urllib.error.URLError as exc:
             if attempt < MAX_PROVIDER_RETRIES - 1:
-                time.sleep(float(min(8, 2 ** attempt)))
+                time.sleep(_retry_delay({}, attempt))
                 continue
             raise ProviderRequestError(
                 provider + " provider connection failed: " + str(exc.reason),
@@ -126,14 +192,8 @@ def ask_model(provider, prompt):
             ) from None
     if data is None:
         raise ProviderRequestError(provider + " provider returned no response", retryable=True)
-
-    if kind == "gemini":
-        candidates = data.get("candidates") or []
-        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
-        content = next((part.get("text") for part in parts if isinstance(part.get("text"), str)), None)
-    else:
-        choices = data.get("choices") or []
-        content = choices[0].get("message", {}).get("content") if choices else None
+    choices = data.get("choices") or []
+    content = choices[0].get("message", {}).get("content") if choices else None
     if not isinstance(content, str) or not content.strip():
         raise ProviderRequestError(provider + " provider returned empty or non-text content")
     return content
