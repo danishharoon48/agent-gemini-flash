@@ -8,10 +8,10 @@ import urllib.error
 import urllib.request
 
 try:
-    from scripts.gemini_model_discovery import discover_generation_models, has_generated_text
+    from scripts.gemini_model_discovery import discover_generation_models, has_valid_ping_response
 except ModuleNotFoundError:
     # Direct execution sets sys.path[0] to scripts/, not the repository root.
-    from gemini_model_discovery import discover_generation_models, has_generated_text
+    from gemini_model_discovery import discover_generation_models, has_valid_ping_response
 
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 REQUEST_TIMEOUT_SECONDS = 10
@@ -52,15 +52,15 @@ def run_diagnostic(api_key):
             API_ROOT + "/models/" + model + ":generateContent",
             api_key,
             {
-                "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 8},
+                "contents": [{"role": "user", "parts": [{"text": 'Return exactly this JSON object and no other text: {"status":"ok","message":"pong"}'}]}],
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 64, "responseMimeType": "application/json"},
             },
         )
-        generated_text = has_generated_text(response)
+        generated_text = has_valid_ping_response(response)
         probe = {
             "model": model,
             "http_status": status,
-            "generated_text": generated_text,
+            "valid_structured_response": generated_text,
         }
         probes.append(probe)
         if selected_model is None and status == 200 and generated_text:

@@ -102,8 +102,9 @@ def _discovered_gemini_models():
         if (
             isinstance(model, str)
             and probe.get("http_status") == 200
-            and probe.get("generated_text") is True
-            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model)
+            and probe.get("valid_structured_response") is True
+            and re.fullmatch(r"gemini-[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model, re.I)
+            and "flash" in model.lower()
         ):
             healthy.add(model)
 
@@ -127,11 +128,11 @@ def _gemini_model_chain(primary):
         "gemini-2.5-flash-lite,gemini-2.5-flash",
     )
     models = _discovered_gemini_models()
-    if primary and primary not in models:
+    if primary and primary.lower().startswith("gemini-") and "flash" in primary.lower() and primary not in models:
         models.append(primary)
     for candidate in configured.split(","):
         candidate = candidate.strip()
-        if candidate and candidate not in models:
+        if candidate and candidate.lower().startswith("gemini-") and "flash" in candidate.lower() and candidate not in models:
             models.append(candidate)
     return models
 
