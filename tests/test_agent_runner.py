@@ -32,6 +32,13 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertIn("\nPREVIOUS SCRIPT:\n", prompt)
         self.assertNotIn("\\nPREVIOUS SCRIPT:\\n", prompt)
 
+    def test_gemini_uses_current_default_model_for_new_api_keys(self):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
+            kind, model, key = agent_runner.provider_config("gemini")
+        self.assertEqual(kind, "gemini")
+        self.assertEqual(model, "gemini-3.8-flash")
+        self.assertEqual(key, "test-key")
+
     def test_sandbox_command_does_not_forward_provider_secrets(self):
         with patch.dict(os.environ, {
             "GEMINI_API_KEY": "gemini-secret-test",
