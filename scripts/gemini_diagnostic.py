@@ -7,7 +7,11 @@ import sys
 import urllib.error
 import urllib.request
 
-from scripts.gemini_model_discovery import discover_generation_models, has_generated_text
+try:
+    from scripts.gemini_model_discovery import discover_generation_models, has_generated_text
+except ModuleNotFoundError:
+    # Direct execution sets sys.path[0] to scripts/, not the repository root.
+    from gemini_model_discovery import discover_generation_models, has_generated_text
 
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 REQUEST_TIMEOUT_SECONDS = 10
@@ -77,7 +81,7 @@ def run_diagnostic(api_key):
     with open(selection_path, "w", encoding="utf-8") as output:
         json.dump(selection, output, sort_keys=True)
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 0 if selected_model else 1
 
 
 if __name__ == "__main__":

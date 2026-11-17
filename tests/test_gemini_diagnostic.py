@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -45,23 +47,44 @@ class GeminiDiagnosticTests(unittest.TestCase):
         self.assertEqual(body, {})
 
     def test_diagnostic_handles_models_list_timeout_without_static_model_probes(self):
-        with (
-            patch.object(
-                gemini_diagnostic,
-                "_request",
-                return_value=(None, {}),
-            ) as request,
-            contextlib.redirect_stdout(io.StringIO()) as stdout,
-        ):
-            exit_code = gemini_diagnostic.run_diagnostic("test-key")
+        with tempfile.TemporaryDirectory() as temporary:
+            selection_path = Path(temporary) / "selection.json"
+            with (
+                patch.dict(os.environ, {"GEMINI_MODEL_SELECTION_PATH": str(selection_path)}),
+                patch.object(
+                    gemini_diagnostic,
+                    "_request",
+                    return_value=(None, {}),
+                ) as request,
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                exit_code = gemini_diagnostic.run_diagnostic("test-key")
+            persisted = json.loads(selection_path.read_text(encoding="utf-8"))
 
         result = json.loads(stdout.getvalue())
-        self.assertEqual(exit_code, 0)
+        self.assertEqual(exit_code, 1)
         self.assertEqual(request.call_count, 1)
         self.assertIsNone(result["models_list_http_status"])
         self.assertEqual(result["models_list_supported"], [])
         self.assertEqual(result["generate_content_probes"], [])
         self.assertIsNone(result["selected_model"])
+        self.assertIsNone(persisted["selected_model"])
+
+    def test_script_entrypoint_imports_discovery_module_when_run_directly(self):
+        environment = os.environ.copy()
+        environment.pop("GEMINI_API_KEY", None)
+        environment.pop("GOOGLE_API_KEY", None)
+        completed = subprocess.run(
+            [sys.executable, "scripts/gemini_diagnostic.py"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("GEMINI_API_KEY is not configured", completed.stdout)
+        self.assertNotIn("ModuleNotFoundError", completed.stderr)
 
     def test_diagnostic_probes_every_discovered_model_and_selects_first_healthy(self):
         listing = {
