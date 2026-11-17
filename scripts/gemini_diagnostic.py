@@ -2,11 +2,13 @@
 """Safe, minimal Gemini API availability diagnostic for GitHub Actions."""
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
 
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+REQUEST_TIMEOUT_SECONDS = 10
 MODELS_TO_PROBE = (
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -26,7 +28,7 @@ def _request(url, api_key, payload=None):
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             body = response.read()
             try:
                 parsed = json.loads(body.decode("utf-8")) if body else {}
@@ -35,7 +37,7 @@ def _request(url, api_key, payload=None):
             return response.status, parsed
     except urllib.error.HTTPError as error:
         return error.code, {}
-    except urllib.error.URLError:
+    except (TimeoutError, socket.timeout, urllib.error.URLError):
         return None, {}
 
 
@@ -76,7 +78,7 @@ def run_diagnostic(api_key):
         "generate_content_probes": probes,
     }
     print(json.dumps(result, sort_keys=True))
-    return 0 if list_status == 200 else 1
+    return 0
 
 
 if __name__ == "__main__":

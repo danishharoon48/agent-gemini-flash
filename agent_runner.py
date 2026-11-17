@@ -6,6 +6,7 @@ import os
 import random
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -134,6 +135,14 @@ def _ask_gemini_model(model, key, prompt):
                 "gemini model " + model + " connection failed: " + str(exc.reason),
                 retryable=True,
             ) from None
+        except (TimeoutError, socket.timeout):
+            if attempt < MAX_PROVIDER_RETRIES - 1:
+                time.sleep(_retry_delay({}, attempt))
+                continue
+            raise ProviderRequestError(
+                "gemini model " + model + " request timed out",
+                retryable=True,
+            ) from None
     if data is None:
         raise ProviderRequestError("gemini model " + model + " returned no response", retryable=True)
     candidates = data.get("candidates") or []
@@ -188,6 +197,14 @@ def ask_model(provider, prompt):
                 continue
             raise ProviderRequestError(
                 provider + " provider connection failed: " + str(exc.reason),
+                retryable=True,
+            ) from None
+        except (TimeoutError, socket.timeout):
+            if attempt < MAX_PROVIDER_RETRIES - 1:
+                time.sleep(_retry_delay({}, attempt))
+                continue
+            raise ProviderRequestError(
+                provider + " provider request timed out",
                 retryable=True,
             ) from None
     if data is None:
