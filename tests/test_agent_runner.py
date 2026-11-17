@@ -56,6 +56,38 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertNotIn("groq-secret-test", command)
         self.assertNotIn("openrouter-secret-test", command)
 
+    def test_execute_script_copies_nested_artifacts_output_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                patch.object(agent_runner, "ROOT", root),
+                patch.object(agent_runner, "OUTPUT", root / "output.json"),
+                patch.object(agent_runner, "ARTIFACTS", root / "artifacts"),
+                patch.object(agent_runner.os, "getuid", return_value=1001, create=True),
+                patch.object(agent_runner.os, "getgid", return_value=1002, create=True),
+            ):
+                def fake_run(command, **kwargs):
+                    mount = next(item for item in command if item.startswith("type=bind,src="))
+                    sandbox_path = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+                    nested_artifacts = sandbox_path / "artifacts"
+                    nested_artifacts.mkdir()
+                    (nested_artifacts / "output.json").write_text(
+                        '{"title": "Example Domain"}', encoding="utf-8"
+                    )
+                    (nested_artifacts / "final.png").write_bytes(b"fake-png")
+                    return subprocess.CompletedProcess(command, 0, "sandbox ok", "")
+
+                with patch.object(agent_runner.subprocess, "run", side_effect=fake_run):
+                    success, logs = agent_runner.execute_script("print('safe')", 30)
+
+                self.assertTrue(success)
+                self.assertIn("sandbox ok", logs)
+                self.assertEqual(
+                    json.loads((root / "output.json").read_text(encoding="utf-8")),
+                    {"title": "Example Domain"},
+                )
+                self.assertEqual((root / "artifacts" / "final.png").read_bytes(), b"fake-png")
+
     def test_execute_script_runs_in_container_and_copies_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
