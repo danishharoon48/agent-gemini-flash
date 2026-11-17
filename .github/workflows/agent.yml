@@ -80,6 +80,7 @@ jobs:
             output.json
             generated_task.py
             artifacts/
+            gemini_model_selection.json
           if-no-files-found: warn
           retention-days: 14
 
