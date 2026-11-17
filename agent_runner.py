@@ -282,6 +282,11 @@ def _copy_sandbox_outputs(sandbox):
         shutil.copytree(artifacts, ARTIFACTS, dirs_exist_ok=True)
 
 
+def _make_sandbox_writable(sandbox):
+    """Allow the non-root Playwright container user to write to the bind mount."""
+    sandbox.chmod(0o777)
+
+
 def execute_script(code, timeout):
     OUTPUT.unlink(missing_ok=True)
     generated = ROOT / "generated_task.py"
@@ -292,6 +297,9 @@ def execute_script(code, timeout):
 
     with tempfile.TemporaryDirectory(prefix="blarumo-agent-sandbox-") as temporary:
         sandbox = Path(temporary)
+        # The Playwright image runs as an unprivileged user (pwuser). TemporaryDirectory
+        # defaults to mode 0700, which prevents that container user from writing to /work.
+        _make_sandbox_writable(sandbox)
         (sandbox / "generated_task.py").write_text(code, encoding="utf-8")
         command = build_sandbox_command(sandbox)
         try:
