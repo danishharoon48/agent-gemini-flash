@@ -316,8 +316,12 @@ def _copy_sandbox_outputs(sandbox):
     script = sandbox / "generated_task.py"
     if script.exists():
         shutil.copy2(script, ROOT / "generated_task.py")
+    # Generated scripts may write output.json at the sandbox root (legacy)
+    # or inside artifacts/ (the documented artifact layout).
     output = sandbox / "output.json"
-    if output.exists():
+    if not output.exists():
+        output = sandbox / "artifacts" / "output.json"
+    if output.is_file():
         shutil.copy2(output, OUTPUT)
     artifacts = sandbox / "artifacts"
     if artifacts.is_dir():
