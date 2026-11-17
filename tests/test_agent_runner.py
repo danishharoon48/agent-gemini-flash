@@ -55,11 +55,6 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertNotIn("groq-secret-test", command)
         self.assertNotIn("openrouter-secret-test", command)
 
-    def test_make_sandbox_writable_grants_container_user_access(self):
-        sandbox = Mock()
-        agent_runner._make_sandbox_writable(sandbox)
-        sandbox.chmod.assert_called_once_with(0o777)
-
     def test_execute_script_runs_in_container_and_copies_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -68,6 +63,8 @@ class AgentRunnerTests(unittest.TestCase):
                 patch.object(agent_runner, "OUTPUT", root / "output.json"),
                 patch.object(agent_runner, "ARTIFACTS", root / "artifacts"),
                 patch.dict(os.environ, {"GEMINI_API_KEY": "never-forward-this"}),
+                patch.object(agent_runner.os, "getuid", return_value=1001, create=True),
+                patch.object(agent_runner.os, "getgid", return_value=1002, create=True),
             ):
                 sandbox_paths = []
                 def fake_run(command, **kwargs):
@@ -77,12 +74,8 @@ class AgentRunnerTests(unittest.TestCase):
                     (sandbox_path / "output.json").write_text('{"success": true}', encoding="utf-8")
                     return subprocess.CompletedProcess(command, 0, "sandbox ok", "")
 
-                with (
-                    patch.object(agent_runner, "_make_sandbox_writable", wraps=agent_runner._make_sandbox_writable) as make_writable,
-                    patch.object(agent_runner.subprocess, "run", side_effect=fake_run) as run,
-                ):
+                with patch.object(agent_runner.subprocess, "run", side_effect=fake_run) as run:
                     success, logs = agent_runner.execute_script("print('safe')", 30)
-                    make_writable.assert_called_once()
 
                 self.assertTrue(success)
                 self.assertIn("sandbox ok", logs)
@@ -90,6 +83,8 @@ class AgentRunnerTests(unittest.TestCase):
                 self.assertEqual(json.loads((root / "output.json").read_text()), {"success": True})
                 command = run.call_args.args[0]
                 self.assertIn("--read-only", command)
+                self.assertIn("--user", command)
+                self.assertEqual(command[command.index("--user") + 1], "1001:1002")
                 self.assertNotIn("never-forward-this", command)
 
 
