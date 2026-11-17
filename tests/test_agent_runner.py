@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import subprocess
 import tempfile
@@ -106,6 +107,44 @@ class AgentRunnerTests(unittest.TestCase):
                 agent_runner._gemini_model_chain("gemini-primary"),
                 ["gemini-primary", "gemini-fallback-a", "gemini-fallback-b"],
             )
+
+    def test_gemini_falls_back_to_next_diagnostic_healthy_model_after_empty_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            selection = {
+                "selected_model": "gemma-healthy",
+                "discovered_models": ["gemma-healthy", "gemini-flash-lite"],
+                "probes": [
+                    {"model": "gemma-healthy", "http_status": 200, "generated_text": True},
+                    {"model": "gemini-flash-lite", "http_status": 200, "generated_text": True},
+                ],
+            }
+            (Path(temporary) / "gemini_model_selection.json").write_text(
+                json.dumps(selection), encoding="utf-8"
+            )
+            empty = io.BytesIO(json.dumps({
+                "candidates": [{"content": {"parts": []}}],
+            }).encode("utf-8"))
+            generated = io.BytesIO(json.dumps({
+                "candidates": [{
+                    "content": {"parts": [{"text": "print('fallback model worked')"}]}
+                }],
+            }).encode("utf-8"))
+
+            with (
+                patch.object(agent_runner, "ROOT", Path(temporary)),
+                patch.dict(os.environ, {
+                    "GEMINI_API_KEY": "test-key",
+                    "GEMINI_MODEL": "gemini-static-primary",
+                    "GEMINI_MODEL_FALLBACKS": "gemini-static-fallback",
+                }, clear=True),
+                patch.object(agent_runner, "urlopen", side_effect=[empty, generated]) as request,
+            ):
+                result = agent_runner.ask_model("gemini", "Generate a harmless test script")
+
+        self.assertEqual(result, "print('fallback model worked')")
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("gemma-healthy:generateContent", request.call_args_list[0].args[0].full_url)
+        self.assertIn("gemini-flash-lite:generateContent", request.call_args_list[1].args[0].full_url)
 
     def test_gemini_falls_back_after_all_primary_503_retries(self):
         import io
