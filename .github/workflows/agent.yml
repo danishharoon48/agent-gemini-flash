@@ -63,7 +63,7 @@ jobs:
       - name: Build isolated Playwright execution image
         run: docker build --pull -f Dockerfile.agent-sandbox -t blarumo-agent-sandbox:local .
       - name: Validate runner
-        run: python -m py_compile agent_runner.py
+        run: python -m py_compile agent_runner.py scripts/gemini_diagnostic.py
       - name: Execute multilingual task
         if: github.event_name == 'workflow_dispatch'
         env:
