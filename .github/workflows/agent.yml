@@ -36,7 +36,7 @@ on:
 jobs:
   execute:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3
     permissions:
       contents: read
     env:
@@ -60,6 +60,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/gemini_diagnostic.py
       - name: Build isolated Playwright execution image
+        if: github.event_name == 'workflow_dispatch'
         run: docker build --pull -f Dockerfile.agent-sandbox -t blarumo-agent-sandbox:local .
       - name: Validate runner
         run: python -m py_compile agent_runner.py scripts/gemini_diagnostic.py
